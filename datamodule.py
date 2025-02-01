@@ -1,3 +1,4 @@
+import math
 import os
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
@@ -16,7 +17,7 @@ import random
 import json
 from vocab import Vocab
 
-vocab = Vocab(dict_path='vocab_syms_full.txt')
+vocab = Vocab(dict_path="vocab_syms_full.txt")
 vocab_size = len(vocab)
 
 Data = List[Tuple[str, Image.Image, List[str]]]
@@ -26,14 +27,23 @@ H_HI = 640
 W_LO = 16
 W_HI = 640
 
+
 class ScaleToLimitRange:
-    def __init__(self, w_lo: int = W_LO, w_hi: int = W_HI, h_lo: int = H_LO, h_hi: int = H_HI) -> None:
+    def __init__(
+        self,
+        patch_size: int = 16,
+        w_lo: int = W_LO,
+        w_hi: int = W_HI,
+        h_lo: int = H_LO,
+        h_hi: int = H_HI,
+    ) -> None:
         assert w_lo <= w_hi and h_lo <= h_hi
         self.w_lo = w_lo
         self.w_hi = w_hi
         self.h_lo = h_lo
         self.h_hi = h_hi
-    
+        self.patch_size = patch_size
+
     def __call__(self, img: np.ndarray) -> np.ndarray:
         h, w = img.shape[:2]
         r = h / w
@@ -44,27 +54,39 @@ class ScaleToLimitRange:
         scale_r = min(self.h_hi / h, self.w_hi / w)
         if scale_r < 1.0:
             # one of h or w highr that hi, so scale down
-            img = cv2.resize(img, None, fx=scale_r, fy=scale_r, interpolation=cv2.INTER_CUBIC)
-            return img
+            img = cv2.resize(
+                img, None, fx=scale_r, fy=scale_r, interpolation=cv2.INTER_CUBIC
+            )
 
         scale_r = max(self.h_lo / h, self.w_lo / w)
         if scale_r > 1.0:
             # one of h or w lower that lo, so scale up
-            img = cv2.resize(img, None, fx=scale_r, fy=scale_r, interpolation=cv2.INTER_CUBIC)
-            return img
-        
+            img = cv2.resize(
+                img, None, fx=scale_r, fy=scale_r, interpolation=cv2.INTER_CUBIC
+            )
+
+        h, w = img.shape[:2]
+
         # in the rectangle, do not scale
         assert self.h_lo <= h <= self.h_hi and self.w_lo <= w <= self.w_hi
+
+        new_h, new_w = img.shape[:2]
+
+        new_h = self.patch_size * math.ceil(new_h / self.patch_size)
+        new_w = self.patch_size * math.ceil(new_w / self.patch_size)
+        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
         return img
 
 
 MAX_SIZE = 32e4  # change here according to your GPU memory
 MIN_SIZE = 3600
+
+
 # load data
 def data_iterator(
     data: Data,
     batch_size: int,
-    batch_Imagesize: int = MAX_SIZE*5,
+    batch_Imagesize: int = MAX_SIZE * 5,
     maxlen: int = 300,
     minImagesize: int = MIN_SIZE,
 ):
@@ -90,9 +112,7 @@ def data_iterator(
         if len(lab) > maxlen:
             print("sentence", i, "length bigger than", maxlen, "ignore")
         elif size < minImagesize:
-            print(
-                f"image: {fname} size:{size} less than {minImagesize}, ignore"
-            )
+            print(f"image: {fname} size:{size} less than {minImagesize}, ignore")
         else:
             if batch_image_size > batch_Imagesize or i == batch_size:  # a batch is full
                 fname_total.append(fname_batch)
@@ -120,10 +140,14 @@ def data_iterator(
     print("total ", len(feature_total), "batch data loaded")
     return list(zip(fname_total, feature_total, label_total))
 
+
 def read_data(path: str, n: int = -1) -> Data:
     data = []
     fns = os.listdir(path)
-    label_dict = { line.strip().split('\t')[0]:line.strip().split('\t')[1]for line in open ('train_ssml_sd.txt').readlines()}
+    label_dict = {
+        line.strip().split("\t")[0]: line.strip().split("\t")[1]
+        for line in open("train_ssml_sd.txt").readlines()
+    }
     if n > 0:
         fns = random.sample(fns, n)
     for fn in tqdm(fns):
@@ -135,7 +159,7 @@ def read_data(path: str, n: int = -1) -> Data:
             #     lbl = json.load(f)
             # data.append((fn, img, lbl["ssml_sd"].split()))
             data.append((fn, img, label_dict[os.path.splitext(fn)[0]].split()))
-        
+
     return data
 
 
@@ -246,4 +270,3 @@ if __name__ == "__main__":
     # train_loader = dm.train_dataloader()
     # for img, mask, tgt, output in train_loader:
     #     break
-
