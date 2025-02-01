@@ -16,15 +16,15 @@ class _Bottleneck(nn.Module):
     def __init__(self, n_channels: int, growth_rate: int, use_dropout: bool):
         super(_Bottleneck, self).__init__()
         interChannels = 4 * growth_rate
-        
+
         self.bn1 = nn.BatchNorm2d(interChannels)
         self.conv1 = nn.Conv2d(n_channels, interChannels, kernel_size=1, bias=False)
-        
+
         self.bn2 = nn.BatchNorm2d(growth_rate)
         self.conv2 = nn.Conv2d(
             interChannels, growth_rate, kernel_size=3, padding=1, bias=False
         )
-        
+
         self.use_dropout = use_dropout
         self.dropout = nn.Dropout(p=0.2)
 
@@ -189,3 +189,20 @@ class Encoder(pl.LightningModule):
         feature = rearrange(feature, "b h w d -> b (h w) d")
         mask = rearrange(mask, "b h w -> b (h w)")
         return feature, mask
+
+
+if __name__ == "__main__":
+    # test encoder
+    encoder = Encoder(
+        d_model=256,
+        growth_rate=24,
+        num_layers=16,
+    )
+
+    img = torch.randn(2, 1, 256, 256)
+    img_mask = torch.ones(2, 256, 256).float()
+
+    out_enc, out_enc_mask = encoder(img, img_mask)
+    print(out_enc.shape, out_enc_mask.shape)
+    # torch.Size([4, 256, 256]) torch.Size([4, 65536])
+    print("encoder test pass")
