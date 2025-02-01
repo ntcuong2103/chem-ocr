@@ -6,79 +6,9 @@ import torch.nn.functional as F
 from einops import rearrange
 from torch import LongTensor
 from torchmetrics import Metric
+from torchmetrics.text import WordErrorRate
 
-from datamodule import vocab
-
-
-class Hypothesis:
-    seq: List[int]
-    score: float
-
-    def __init__(
-        self,
-        seq_tensor: LongTensor,
-        score: float,
-        direction: str,
-    ) -> None:
-        assert direction in {"l2r", "r2l"}
-        raw_seq = seq_tensor.tolist()
-
-        if direction == "r2l":
-            result = raw_seq[::-1]
-        else:
-            result = raw_seq
-
-        self.seq = result
-        self.score = score
-
-    def __len__(self):
-        if len(self.seq) != 0:
-            return len(self.seq)
-        else:
-            return 1
-
-    def __str__(self):
-        return f"seq: {self.seq}, score: {self.score}"
-
-
-class ExpRateRecorder(Metric):
-    def __init__(self, dist_sync_on_step=False):
-        super().__init__(dist_sync_on_step=dist_sync_on_step)
-
-        self.add_state("total_line", default=torch.tensor(0.0), dist_reduce_fx="sum")
-        self.add_state("rec", default=torch.tensor(0.0), dist_reduce_fx="sum")
-
-    def update(self, indices_hat: List[int], indices: List[int]):
-        dist = editdistance.eval(indices_hat, indices)
-
-        if dist == 0:
-            self.rec += 1
-
-        self.total_line += 1
-
-    def compute(self) -> float:
-        exp_rate = self.rec / self.total_line
-        return exp_rate
-
-
-def ce_loss(
-    output_hat: torch.Tensor, output: torch.Tensor, ignore_idx: int = vocab.PAD_IDX
-) -> torch.Tensor:
-    """comput cross-entropy loss
-
-    Args:
-        output_hat (torch.Tensor): [batch, len, e]
-        output (torch.Tensor): [batch, len]
-        ignore_idx (int):
-
-    Returns:
-        torch.Tensor: loss value
-    """
-    flat_hat = rearrange(output_hat, "b l e -> (b l) e")
-    flat = rearrange(output, "b l -> (b l)")
-    loss = F.cross_entropy(flat_hat, flat, ignore_index=ignore_idx)
-    return loss
-
+from vocab import vocab, vocab_full
 
 def to_tgt_output(
     tokens: List[List[int]], direction: str, device: torch.device
@@ -134,7 +64,6 @@ def to_tgt_output(
 
     return tgt, out
 
-
 def to_bi_tgt_out(
     tokens: List[List[int]], device: torch.device
 ) -> Tuple[LongTensor, LongTensor]:
@@ -158,3 +87,96 @@ def to_bi_tgt_out(
     out = torch.cat((l2r_out, r2l_out), dim=0)
 
     return tgt, out
+
+class ExpRateRecorder(Metric):
+    def __init__(self, dist_sync_on_step=False):
+        super().__init__(dist_sync_on_step=dist_sync_on_step)
+
+        self.add_state("total_line", default=torch.tensor(0.0), dist_reduce_fx="sum")
+        self.add_state("rec", default=torch.tensor(0.0), dist_reduce_fx="sum")
+
+    def update(self, indices_hat: List[int], indices: List[int]):
+        dist = editdistance.eval(indices_hat, indices)
+
+        if dist == 0:
+            self.rec += 1
+
+        self.total_line += 1
+
+    def compute(self) -> float:
+        exp_rate = self.rec / self.total_line
+        return exp_rate
+
+
+def ce_loss(
+    output_hat: torch.Tensor, output: torch.Tensor, ignore_idx: int = vocab.PAD_IDX
+) -> torch.Tensor:
+    """comput cross-entropy loss
+
+    Args:
+        output_hat (torch.Tensor): [batch, len, e]
+        output (torch.Tensor): [batch, len]
+        ignore_idx (int):
+
+    Returns:
+        torch.Tensor: loss value
+    """
+    flat_hat = rearrange(output_hat, "b l e -> (b l) e")
+    flat = rearrange(output, "b l -> (b l)")
+    loss = F.cross_entropy(flat_hat, flat, ignore_index=ignore_idx)
+    return loss
+
+#FIX
+def we_rate(
+    pred, tgt: List[List[int]], device: torch.device
+) -> torch.Tensor:
+    """comput word error rate
+    Args:
+        pred (torch.Tensor): [b, len] as output of model
+        tgt (List[List[int]]): tgt in the form of tokens
+
+    Returns:
+        torch.Tensor: loss value
+    """
+    new_pred = []
+    for seq in pred.tolist():
+        new_string = []
+        for x in seq:
+            if x != 2 and x != 1:
+                new_string.append(str(x))
+            else:
+                new_string.append(str(x))
+                break
+        new_pred.append(" ".join(new_string))
+        
+    # print(len(tgt))
+    l2r_tgt, l2r_out = to_tgt_output(tgt, "l2r", device)
+    r2l_tgt, r2l_out = to_tgt_output(tgt, "r2l", device)
+        
+    new_tgt = []
+    for seq in l2r_out.tolist():
+        new_string = []
+        for x in seq:
+            if x != 2 and x != 1:
+                new_string.append(str(x))
+            else:
+                new_string.append(str(x))
+                break
+        new_tgt.append(" ".join(new_string)) 
+    for seq in r2l_out.tolist():
+        new_string = []
+        for x in seq:
+            if x != 2 and x != 1:
+                new_string.append(str(x))
+            else:
+                new_string.append(str(x))
+                break
+        new_tgt.append(" ".join(new_string)) 
+           
+    wer = WordErrorRate()
+    we_rate = wer(new_pred, new_tgt)
+
+    # print(new_pred)
+    # print(new_tgt)
+    # print(we_rate)
+    return we_rate

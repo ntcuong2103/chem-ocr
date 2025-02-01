@@ -6,41 +6,36 @@ import torch.optim as optim
 from torch import FloatTensor, LongTensor
 
 from datamodule import Batch, vocab
-from bttr import BTTR
-from utils import ExpRateRecorder, Hypothesis, ce_loss, to_bi_tgt_out
+from bttr import VisionModel
+from utils import ExpRateRecorder, ce_loss, we_rate, to_bi_tgt_out
+from vocab import vocab
 
 
-class LitBTTR(pl.LightningModule):
+class CrocsBiVision(pl.LightningModule):
     def __init__(
         self,
         d_model: int,
         # encoder
-        growth_rate: int,
-        num_layers: int,
+        num_encoder_layers: int,
         # decoder
-        nhead: int,
+        num_heads: int,
         num_decoder_layers: int,
-        dim_feedforward: int,
+        d_ff: int,
         dropout: float,
-        # beam search
-        beam_size: int,
-        max_len: int,
-        alpha: float,
         # training
         learning_rate: float,
         patience: int,
-        vocab_size: int=359,
+        vocab_size: int = 359,
     ):
         super().__init__()
         self.save_hyperparameters()
 
-        self.bttr = BTTR(
+        self.model = VisionModel(
             d_model=d_model,
-            growth_rate=growth_rate,
-            num_layers=num_layers,
-            nhead=nhead,
+            num_heads=num_heads,
+            num_encoder_layers=num_encoder_layers,
             num_decoder_layers=num_decoder_layers,
-            dim_feedforward=dim_feedforward,
+            dim_feedforward=d_ff,
             dropout=dropout,
             vocab_size=vocab_size,
         )
@@ -50,61 +45,21 @@ class LitBTTR(pl.LightningModule):
     def forward(
         self, img: FloatTensor, img_mask: LongTensor, tgt: LongTensor
     ) -> FloatTensor:
-        """run img and bi-tgt
-
-        Parameters
-        ----------
-        img : FloatTensor
-            [b, 1, h, w]
-        img_mask: LongTensor
-            [b, h, w]
-        tgt : LongTensor
-            [2b, l]
-
-        Returns
-        -------
-        FloatTensor
-            [2b, l, vocab_size]
-        """
-        return self.bttr(img, img_mask, tgt)
-
-    def beam_search(
-        self,
-        img: FloatTensor,
-        beam_size: int = 10,
-        max_len: int = 200,
-        alpha: float = 1.0,
-    ) -> str:
-        """for inference, one image at a time
-
-        Parameters
-        ----------
-        img : FloatTensor
-            [1, h, w]
-        beam_size : int, optional
-            by default 10
-        max_len : int, optional
-            by default 200
-        alpha : float, optional
-            by default 1.0
-
-        Returns
-        -------
-        str
-            LaTex string
-        """
-        assert img.dim() == 3
-        img_mask = torch.zeros_like(img, dtype=torch.float)  # squeeze channel
-        hyps = self.bttr.beam_search(img.unsqueeze(0), img_mask, beam_size, max_len)
-        best_hyp = max(hyps, key=lambda h: h.score / (len(h) ** alpha))
-        return vocab.indices2label(best_hyp.seq)
+        return self.model(img, img_mask, tgt)
 
     def training_step(self, batch: Batch, _):
         tgt, out = to_bi_tgt_out(batch.indices, self.device)
         out_hat = self(batch.imgs, batch.mask, tgt)
 
         loss = ce_loss(out_hat, out)
-        self.log("train_loss", loss, on_step=False, on_epoch=True, sync_dist=True, batch_size=len(batch))
+        self.log(
+            "train_loss",
+            loss,
+            on_step=False,
+            on_epoch=True,
+            sync_dist=True,
+            batch_size=len(batch),
+        )
 
         return loss
 
@@ -120,31 +75,21 @@ class LitBTTR(pl.LightningModule):
             on_epoch=True,
             prog_bar=True,
             sync_dist=True,
-            batch_size=len(batch)
+            batch_size=len(batch),
         )
 
-        # hyps = self.bttr.beam_search(
-        #     batch.imgs, batch.mask, self.hparams.beam_size, self.hparams.max_len
-        # )
-        # best_hyp = max(hyps, key=lambda h: h.score / (len(h) ** self.hparams.alpha))
-
-        # self.exprate_recorder(best_hyp.seq, batch.indices[0])
-        # self.log(
-        #     "val_ExpRate",
-        #     self.exprate_recorder,
-        #     prog_bar=True,
-        #     on_step=False,
-        #     on_epoch=True,
-        # )
+        wer = we_rate(out_hat.argmax(dim=2), batch.indices, self.device)
+        self.log(
+            "val_wer",
+            wer,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            sync_dist=True,
+            batch_size=len(batch),
+        )
 
     def test_step(self, batch: Batch, _):
-        # hyps = self.bttr.beam_search(
-        #     batch.imgs, batch.mask, self.hparams.beam_size, self.hparams.max_len
-        # )
-        # best_hyp = max(hyps, key=lambda h: h.score / (len(h) ** self.hparams.alpha))
-        # self.exprate_recorder(best_hyp.seq, batch.indices[0])
-
-        # return batch.img_bases[0], vocab.indices2label(best_hyp.seq)
         tgt, out = to_bi_tgt_out(batch.indices, self.device)
         out_hat = self(batch.imgs, batch.mask, tgt)
 
@@ -156,9 +101,24 @@ class LitBTTR(pl.LightningModule):
             on_epoch=True,
             prog_bar=True,
             sync_dist=True,
-            batch_size=len(batch)
+            batch_size=len(batch),
         )
 
+        wer = we_rate(out_hat.argmax(dim=2), batch.indices, self.device)
+
+        print(out_hat.argmax(dim=2))
+        print(batch.indices)
+        print(wer)
+
+        self.log(
+            "val_wer",
+            wer,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            sync_dist=True,
+            batch_size=len(batch),
+        )
 
     def test_epoch_end(self, test_outputs) -> None:
         pass

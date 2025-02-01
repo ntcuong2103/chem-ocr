@@ -1,39 +1,49 @@
-import os
-from dataclasses import dataclass
-from typing import List, Optional, Tuple
-import cv2
 import numpy as np
-from tqdm import tqdm
-
+import cv2
+from typing import List, Optional, Tuple
+from torchvision.transforms import transforms, Compose
 import pytorch_lightning as pl
-import torch
 from PIL import Image
 from torch import FloatTensor, LongTensor
 from torch.utils.data.dataloader import DataLoader
-from torchvision.transforms import transforms, Compose
 
+import math
+
+from dataclasses import dataclass
+import torch
+
+import os
 import random
-import json
-from vocab import Vocab
+from tqdm import tqdm
 
-vocab = Vocab(dict_path='vocab_syms_full.txt')
-vocab_size = len(vocab)
+from vocab import vocab, vocab_full
 
+# DataType: fname, image, output
 Data = List[Tuple[str, Image.Image, List[str]]]
 
+# Scale images down for easy processing
 H_LO = 16
 H_HI = 640
 W_LO = 16
 W_HI = 640
 
-class ScaleToLimitRange:
-    def __init__(self, w_lo: int = W_LO, w_hi: int = W_HI, h_lo: int = H_LO, h_hi: int = H_HI) -> None:
+
+class ScaleToImageSize:
+    def __init__(
+        self,
+        patch_size: int = 16,
+        w_lo: int = W_LO,
+        w_hi: int = W_HI,
+        h_lo: int = H_LO,
+        h_hi: int = H_HI,
+    ) -> None:
         assert w_lo <= w_hi and h_lo <= h_hi
         self.w_lo = w_lo
         self.w_hi = w_hi
         self.h_lo = h_lo
         self.h_hi = h_hi
-    
+        self.patch_size = patch_size
+
     def __call__(self, img: np.ndarray) -> np.ndarray:
         h, w = img.shape[:2]
         r = h / w
@@ -44,29 +54,42 @@ class ScaleToLimitRange:
         scale_r = min(self.h_hi / h, self.w_hi / w)
         if scale_r < 1.0:
             # one of h or w highr that hi, so scale down
-            img = cv2.resize(img, None, fx=scale_r, fy=scale_r, interpolation=cv2.INTER_CUBIC)
-            return img
+            img = cv2.resize(
+                img, None, fx=scale_r, fy=scale_r, interpolation=cv2.INTER_CUBIC
+            )
 
         scale_r = max(self.h_lo / h, self.w_lo / w)
         if scale_r > 1.0:
             # one of h or w lower that lo, so scale up
-            img = cv2.resize(img, None, fx=scale_r, fy=scale_r, interpolation=cv2.INTER_CUBIC)
-            return img
-        
+            img = cv2.resize(
+                img, None, fx=scale_r, fy=scale_r, interpolation=cv2.INTER_CUBIC
+            )
+
+        h, w = img.shape[:2]
+
         # in the rectangle, do not scale
         assert self.h_lo <= h <= self.h_hi and self.w_lo <= w <= self.w_hi
+
+        new_h, new_w = img.shape[:2]
+
+        new_h = self.patch_size * math.ceil(new_h / self.patch_size)
+        new_w = self.patch_size * math.ceil(new_w / self.patch_size)
+        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
         return img
 
 
 MAX_SIZE = 32e4  # change here according to your GPU memory
 MIN_SIZE = 3600
+
+
 # load data
 def data_iterator(
     data: Data,
     batch_size: int,
-    batch_Imagesize: int = MAX_SIZE*5,
+    batch_Imagesize: int = MAX_SIZE * 5,
     maxlen: int = 300,
     minImagesize: int = MIN_SIZE,
+    mode="train",
 ):
     fname_batch = []
     feature_batch = []
@@ -78,7 +101,7 @@ def data_iterator(
 
     data.sort(key=lambda x: x[1].size)
 
-    transform = Compose([ScaleToLimitRange(), transforms.ToTensor()])
+    transform = Compose([ScaleToImageSize(), transforms.ToTensor()])
 
     i = 0
     for fname, fea, lab in data:
@@ -90,53 +113,82 @@ def data_iterator(
         if len(lab) > maxlen:
             print("sentence", i, "length bigger than", maxlen, "ignore")
         elif size < minImagesize:
-            print(
-                f"image: {fname} size:{size} less than {minImagesize}, ignore"
-            )
+            print(f"image: {fname} size:{size} less than {minImagesize}, ignore")
         else:
-            if batch_image_size > batch_Imagesize or i == batch_size:  # a batch is full
-                fname_total.append(fname_batch)
-                feature_total.append(feature_batch)
-                label_total.append(label_batch)
-                i = 0
-                biggest_image_size = size
-                fname_batch = []
-                feature_batch = []
-                label_batch = []
-                fname_batch.append(fname)
-                feature_batch.append(fea)
-                label_batch.append(lab)
-                i += 1
+            if mode == "train":
+                if (
+                    batch_image_size > batch_Imagesize or i == batch_size
+                ):  # a batch is full
+                    fname_total.append(fname_batch)
+                    feature_total.append(feature_batch)
+                    label_total.append(label_batch)
+                    i = 0
+                    biggest_image_size = size
+                    fname_batch = []
+                    feature_batch = []
+                    label_batch = []
+                    fname_batch.append(fname)
+                    feature_batch.append(fea)
+                    label_batch.append(lab)
+                    i += 1
+                else:
+                    fname_batch.append(fname)
+                    feature_batch.append(fea)
+                    label_batch.append(lab)
+                    i += 1
             else:
                 fname_batch.append(fname)
                 feature_batch.append(fea)
                 label_batch.append(lab)
-                i += 1
 
-    # last batch
-    fname_total.append(fname_batch)
-    feature_total.append(feature_batch)
-    label_total.append(label_batch)
+                fname_total.append(fname_batch)
+                feature_total.append(feature_batch)
+                label_total.append(label_batch)
+
+                fname_batch = []
+                feature_batch = []
+                label_batch = []
+
+    if mode == "train":
+        # last batch
+        fname_total.append(fname_batch)
+        feature_total.append(feature_batch)
+        label_total.append(label_batch)
     print("total ", len(feature_total), "batch data loaded")
     return list(zip(fname_total, feature_total, label_total))
 
+
+# n: number of files to use
 def read_data(path: str, n: int = -1) -> Data:
     data = []
     fns = os.listdir(path)
-    label_dict = { line.strip().split('\t')[0]:line.strip().split('\t')[1]for line in open ('train_ssml_sd.txt').readlines()}
+    jpg_fns = ["train_38563.jpg", "train_10674.jpg", "train_30738.jpg"]
+
+    label_dict = {
+        line.strip().split("\t")[0]: line.strip().split("\t")[1]
+        for line in open("train_ssml_sd.txt").readlines()
+    }
+
+    # randomise
     if n > 0:
-        fns = random.sample(fns, n)
-    for fn in tqdm(fns):
+        jpg_fns = random.sample(jpg_fns, n)
+    i = 0
+    # load into data
+    for fn in tqdm(jpg_fns):
         if fn.endswith(".jpg"):
-            # img = Image.open(os.path.join(path, fn))
+            print(fn, i)
+            i += 1
             img = cv2.imread(os.path.join(path, fn), cv2.IMREAD_GRAYSCALE)
-            # lbl_fn = fn.replace(".jpg", ".json")
-            # with open(os.path.join(path, lbl_fn), "r") as f:
-            #     lbl = json.load(f)
-            # data.append((fn, img, lbl["ssml_sd"].split()))
-            data.append((fn, img, label_dict[os.path.splitext(fn)[0]].split()))
-        
+            data.append(
+                (fn, img, label_dict[os.path.splitext(fn)[0] + ".json"].split())
+            )
+
     return data
+
+
+def build_dataset(folder: str, batch_size: int, n: int = -1, mode="train"):
+    data = read_data(folder, n)
+    return data_iterator(data, batch_size, mode=mode)
 
 
 @dataclass
@@ -160,9 +212,14 @@ class Batch:
 
 def collate_fn(batch):
     assert len(batch) == 1
+    # ????
     batch = batch[0]
+
+    # file name
     fnames = batch[0]
+    # img Tensor
     images_x = batch[1]
+    # expected output
     seqs_y = [vocab.words2indices(x) for x in batch[2]]
 
     heights_x = [s.size(1) for s in images_x]
@@ -173,7 +230,12 @@ def collate_fn(batch):
     max_width_x = max(widths_x)
 
     x = torch.zeros(n_samples, 1, max_height_x, max_width_x)
-    x_mask = torch.ones(n_samples, max_height_x, max_width_x, dtype=torch.float)
+    x_mask = torch.ones(
+        n_samples,
+        math.floor(max_height_x / 16) * 16,
+        math.floor(max_width_x / 16) * 16,
+        dtype=torch.float,
+    )
     for idx, s_x in enumerate(images_x):
         x[idx, :, : heights_x[idx], : widths_x[idx]] = s_x
         x_mask[idx, : heights_x[idx], : widths_x[idx]] = 0
@@ -182,27 +244,18 @@ def collate_fn(batch):
     return Batch(fnames, x, x_mask, seqs_y)
 
 
-def build_dataset(folder: str, batch_size: int, n: int = -1):
-    data = read_data(folder, n)
-    return data_iterator(data, batch_size)
-
-
-class CROCSDatamodule(pl.LightningDataModule):
-    def __init__(
-        self,
-        batch_size: int = 8,
-        num_workers: int = 5,
-    ) -> None:
+class CROCSDataModule(pl.LightningDataModule):
+    def __init__(self, batch_size: int, num_workers: int):
         super().__init__()
         self.batch_size = batch_size
         self.num_workers = num_workers
 
-    def setup(self, stage: Optional[str] = None) -> None:
+    def setup(self, stage):
         if stage == "fit" or stage is None:
-            self.train_dataset = build_dataset("train", self.batch_size, 10000)
+            self.train_dataset = build_dataset("train", self.batch_size, 40000)
             self.val_dataset = build_dataset("train", self.batch_size, 5000)
         if stage == "test" or stage is None:
-            self.test_dataset = build_dataset("train", self.batch_size, 1000)
+            self.test_dataset = build_dataset("train", self.batch_size, 3, mode="test")
 
     def train_dataloader(self):
         return DataLoader(
@@ -230,20 +283,5 @@ class CROCSDatamodule(pl.LightningDataModule):
 
 
 if __name__ == "__main__":
+    # test
     build_dataset("train", 16, 100)
-    # from argparse import ArgumentParser
-
-    # batch_size = 2
-
-    # parser = ArgumentParser()
-    # parser = CROHMEDatamodule.add_argparse_args(parser)
-
-    # args = parser.parse_args(["--batch_size", f"{batch_size}"])
-
-    # dm = CROHMEDatamodule(**vars(args))
-    # dm.setup()
-
-    # train_loader = dm.train_dataloader()
-    # for img, mask, tgt, output in train_loader:
-    #     break
-

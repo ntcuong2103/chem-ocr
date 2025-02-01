@@ -1,35 +1,45 @@
-from datamodule import CROCSDatamodule
-from lit_bttr import LitBTTR
-from pytorch_lightning import Trainer
-from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
+from datamodule import CROCSDataModule
+from lit_bttr import CrocsBiVision
+from pytorch_lightning import Trainer, seed_everything
+from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint, EarlyStopping
+
+from vocab import vocab_full_size, vocab_size
 
 if __name__ == "__main__":
-    # model_load = LitBTTR.load_from_checkpoint('lightning_logs/version_2/checkpoints/epoch=48-step=837214-val_loss=0.3860.ckpt', strict=False)
-    # model = LitBTTR(d_model=256, g
-    # rowth_rate=24, num_layers=16, nhead=8, num_decoder_layers=3, dim_feedforward=1024, vocab_size=575, dropout=0.3, beam_size=1, max_len=200, alpha=1.0, learning_rate=1, patience=20)
-    # model.bttr.encoder = model_load.bttr.encoder
-    # model.bttr.decoder.model = model_load.bttr.decoder.model
-    model = LitBTTR.load_from_checkpoint('lightning_logs/version_0/checkpoints/epoch=0-step=1307-val_loss=1.6266.ckpt')
-    model.hparams.learning_rate = 0.01
+  # model initialization
+  # model = CrocsBiVision(d_model=256, num_encoder_layers=3, num_heads=8, num_decoder_layers=3, d_ff=1024, vocab_size=vocab_size, dropout=0.3, learning_rate=0.01, patience=20)
+  model = CrocsBiVision.load_from_checkpoint('bivision-logs-new2/epoch=49-step=685450-val_loss=0.6705-val_wer=0.2955-359.ckpt')
+  
+  model.hparams.learning_rate = 0.05
 
-    dm = CROCSDatamodule(batch_size=32, num_workers=15)
-    trainer = Trainer(
-        callbacks = [
-            LearningRateMonitor(logging_interval='epoch'),
-            ModelCheckpoint(dirpath="crocs-logs",filename='{epoch}-{step}-{val_loss:.4f}', save_top_k=10, monitor='val_loss', mode='min'),
-            
-        ], 
-        check_val_every_n_epoch=1,
-        fast_dev_run=False,
+  # data module
+  dm = CROCSDataModule(batch_size=32, num_workers=15)
+  
+  # for reproducibility
+  seed_everything(80, workers=True)
+  
+  # trainer
+  trainer = Trainer(
+    callbacks = [
+      LearningRateMonitor(logging_interval='epoch'),
+      ModelCheckpoint(dirpath='bivision-logs-new2',filename='{epoch}-{step}-{val_loss:.4f}-{val_wer:.4f}-359', save_top_k=10, monitor='val_loss', mode='min'),
+      EarlyStopping(monitor='val_wer', patience=20, mode='min')
+    ],
+    
+    # val check every epoch
+    check_val_every_n_epoch=1,
+    
+    # for debugging
+    fast_dev_run=False,
 
-        deterministic=False, 
-        max_epochs=50, 
+    deterministic=False, 
+    max_epochs=50,  
 
-        accelerator='gpu',
-        devices=1,
-    )
+    accelerator='gpu',
+    devices=1,
+  )
 
-    if False:
-        trainer.test(model, dm)
-    else:
-        trainer.fit(model, dm)
+  if False:
+    trainer.test(model, dm)
+  else:
+    trainer.fit(model, dm)
