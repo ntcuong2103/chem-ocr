@@ -6,8 +6,6 @@ from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 if __name__ == "__main__":
     model = LitBTTR(
         d_model=256,
-        image_patch_size=16,
-        num_encoder_layers=3,
         nhead=8,
         num_decoder_layers=3,
         dim_feedforward=1024,

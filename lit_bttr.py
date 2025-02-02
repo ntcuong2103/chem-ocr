@@ -15,8 +15,6 @@ class LitBTTR(pl.LightningModule):
         self,
         d_model: int,
         # encoder
-        image_patch_size: int,
-        num_encoder_layers: int,
         # decoder
         nhead: int,
         num_decoder_layers: int,
@@ -36,8 +34,6 @@ class LitBTTR(pl.LightningModule):
 
         self.bttr = BTTR(
             d_model=d_model,
-            image_patch_size=image_patch_size,
-            num_encoder_layers=num_encoder_layers,
             nhead=nhead,
             num_decoder_layers=num_decoder_layers,
             dim_feedforward=dim_feedforward,

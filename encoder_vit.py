@@ -19,6 +19,7 @@ def _build_transformer_encoder(
         nhead=nhead,
         dim_feedforward=dim_feedforward,
         dropout=dropout,
+        batch_first=True,
     )
 
     return TransformerEncoder(encoder_layer, num_encoder_layers)
@@ -38,12 +39,12 @@ class Encoder(pl.LightningModule):
 
         self.conv2d = nn.Conv2d(
             in_channels=1,
-            out_channels=image_patch_size**2,
+            out_channels=d_model,
             kernel_size=image_patch_size,
             stride=image_patch_size,
             padding=0,
         )
-        self.bn = nn.BatchNorm2d(image_patch_size**2)
+        self.bn = nn.BatchNorm2d(d_model)
 
         self.image_pos_enc = ImgPosEnc(d_model, normalize=True)
 
@@ -85,7 +86,7 @@ class Encoder(pl.LightningModule):
 if __name__ == "__main__":
     # test encoder
     encoder = Encoder(
-        d_model=256,
+        d_model=512,
         nhead=8,
         num_encoder_layers=16,
         dim_feedforward=1024,
@@ -98,5 +99,4 @@ if __name__ == "__main__":
 
     out_enc, out_enc_mask = encoder(img, img_mask)
     print(out_enc.shape, out_enc_mask.shape)
-    # torch.Size([4, 256, 256]) torch.Size([4, 65536])
-    print("encoder test pass")
+    # torch.Size([2, 256, 512]) torch.Size([2, 256])

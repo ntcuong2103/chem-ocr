@@ -7,15 +7,13 @@ from torch import FloatTensor, LongTensor
 from utils import Hypothesis
 
 from decoder import Decoder
-from encoder_vit import Encoder
+from encoder_vit_pretrained import Encoder
 
 
 class BTTR(pl.LightningModule):
     def __init__(
         self,
         d_model: int,
-        image_patch_size: int,
-        num_encoder_layers: int,
         nhead: int,
         num_decoder_layers: int,
         dim_feedforward: int,
@@ -26,11 +24,6 @@ class BTTR(pl.LightningModule):
 
         self.encoder = Encoder(
             d_model=d_model,
-            nhead=nhead,
-            num_encoder_layers=num_encoder_layers,
-            dim_feedforward=dim_feedforward,
-            dropout=dropout,
-            image_patch_size=image_patch_size,
         )
         
         self.decoder = Decoder(
